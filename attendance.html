@@ -58,17 +58,16 @@
 <body>
   <div class="topbar">
     打卡紀錄
-    <span class="menu">☰</span>
   </div>
 
   <div class="picker">
-    <select id="who"><option>載入中…</option></select>
+    <select id="who"><option value="">載入中…</option></select>
   </div>
 
   <div class="toolbar">
-    <button class="navbtn" id="prev">‹ 上一週</button>
+    <button class="navbtn" id="prev">‹ 上一月</button>
     <span class="range" id="range">—</span>
-    <button class="navbtn" id="next">下一週 ›</button>
+    <button class="navbtn" id="next">下一月 ›</button>
   </div>
 
   <table>
@@ -87,26 +86,24 @@
   <script>
     /*************** CONFIG — 上傳前請填入 ***************/
     // 跟 index.html 一樣，用 Apps Script 部署的 /exec 網址
-    const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbypJPX4bjGbXvDZfqXcdmI-7Im3L-XDIHoKCeO4ns9y31zdbsXmZiUU0fPjoseCV--RyA/exec';
+    const WEB_APP_URL = 'https://script.google.com/macros/s/XXXX/exec';
     /****************************************************/
 
     const $ = (id) => document.getElementById(id);
     let allRecords = [];   // 全部打卡紀錄
     let names = [];        // 員工名單
-    let weekOffset = 0;    // 0=本週，-1=上一週，+1=下一週
+    let monthOffset = 0;   // 0=本月，-1=上一月，+1=下一月
 
-    // ── 日期工具（以「週一」為一週開始）──
-    function startOfWeek(base) {
-      const d = new Date(base);
-      d.setHours(0, 0, 0, 0);
-      const day = (d.getDay() + 6) % 7; // 週一=0
-      d.setDate(d.getDate() - day);
-      return d;
+    // ── 月份工具 ──
+    // 回傳套用 offset 後的 {y, m}（m 為 1~12）
+    function targetMonth() {
+      const now = new Date();
+      const d = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
+      return { y: d.getFullYear(), m: d.getMonth() + 1 };
     }
-    function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
-    function ymd(d) {
-      const p = (n) => String(n).padStart(2, '0');
-      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+    // 該月份的字首，例如 '2026-08'
+    function monthPrefix(t) {
+      return t.y + '-' + String(t.m).padStart(2, '0');
     }
 
     // ── JSONP 撈資料 ──
@@ -128,41 +125,44 @@
       allRecords = data;
       names = [...new Set(data.map((r) => r.name).filter(Boolean))].sort();
       const sel = $('who');
-      if (names.length === 0) {
-        sel.innerHTML = '<option>（尚無資料）</option>';
-        render();
-        return;
-      }
-      sel.innerHTML = names.map((n) => `<option value="${n}">${n}</option>`).join('');
+      // 第一個選項是預設提示「員工姓名」（value 空字串），選了才顯示該員工資料
+      const placeholder = '<option value="">員工姓名</option>';
+      sel.innerHTML = placeholder + names.map((n) => `<option value="${n}">${n}</option>`).join('');
       render();
     }
 
     // ── 渲染表格 ──
     function render() {
       const name = $('who').value;
-      const wkStart = addDays(startOfWeek(new Date()), weekOffset * 7);
-      const wkEnd = addDays(wkStart, 6);
-      $('range').textContent = ymd(wkStart) + ' ~ ' + ymd(wkEnd);
-      $('next').disabled = weekOffset >= 0; // 不看未來週
+      const t = targetMonth();
+      const prefix = monthPrefix(t);           // 例如 '2026-08'
+      $('range').textContent = t.y + '年' + String(t.m).padStart(2, '0') + '月';
+      $('next').disabled = monthOffset >= 0;    // 不看未來月
 
-      // 篩選：該員工 + 該週
-      const startStr = ymd(wkStart), endStr = ymd(wkEnd);
-      const inWeek = allRecords.filter(
-        (r) => r.name === name && r.date >= startStr && r.date <= endStr
+      const tbody = $('rows');
+
+      // 還沒選員工 → 提示
+      if (!name) {
+        tbody.innerHTML = '<tr><td colspan="3" class="empty">請先在上方選擇員工</td></tr>';
+        return;
+      }
+
+      // 篩選：該員工 + 該月份
+      const inMonth = allRecords.filter(
+        (r) => r.name === name && r.date.slice(0, 7) === prefix
       );
 
       // 依日期彙整：上班取最早、下班取最晚
       const byDate = {};
-      inWeek.forEach((r) => {
+      inMonth.forEach((r) => {
         const d = (byDate[r.date] = byDate[r.date] || { in: null, out: null });
         if (r.type.indexOf('上') > -1) { if (!d.in || r.time < d.in) d.in = r.time; }
         if (r.type.indexOf('下') > -1) { if (!d.out || r.time > d.out) d.out = r.time; }
       });
 
       const dates = Object.keys(byDate).sort().reverse(); // 新到舊
-      const tbody = $('rows');
       if (dates.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="3" class="empty">本週沒有打卡紀錄</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="3" class="empty">本月沒有打卡紀錄</td></tr>';
         return;
       }
       tbody.innerHTML = dates.map((dt) => {
@@ -176,8 +176,8 @@
     }
 
     // ── 事件 ──
-    $('prev').addEventListener('click', () => { weekOffset -= 1; render(); });
-    $('next').addEventListener('click', () => { if (weekOffset < 0) { weekOffset += 1; render(); } });
+    $('prev').addEventListener('click', () => { monthOffset -= 1; render(); });
+    $('next').addEventListener('click', () => { if (monthOffset < 0) { monthOffset += 1; render(); } });
     $('who').addEventListener('change', render);
 
     loadData();
