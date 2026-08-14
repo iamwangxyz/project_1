@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<!--
+  出勤明細頁（放 GitHub Pages）
+  用 JSONP 向 Apps Script 撈打卡紀錄，依員工 + 週次顯示日期/上班/下班。
+  上傳前只要改下方 CONFIG 的 WEB_APP_URL（跟 index.html 用同一個 /exec 網址）。
+-->
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>出勤明細</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif;
+      background: #fff; color: #333;
+    }
+    /* 標題列 */
+    .topbar {
+      background: #3f9bf5; color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      position: relative; height: 52px; font-size: 18px; font-weight: 600;
+    }
+    .topbar .menu { position: absolute; right: 16px; font-size: 20px; }
+    /* 員工選單 + 週切換列 */
+    .toolbar {
+      display: flex; align-items: center; justify-content: space-between;
+      background: #eef3f8; border-bottom: 1px solid #e2e8f0;
+      padding: 8px 12px; font-size: 13px; color: #555;
+    }
+    .navbtn {
+      background: none; border: none; color: #3f9bf5; font-size: 13px;
+      cursor: pointer; padding: 4px 6px; white-space: nowrap;
+    }
+    .navbtn:disabled { color: #bcc7d3; cursor: default; }
+    .range { flex: 1; text-align: center; color: #444; letter-spacing: .3px; }
+    .picker { padding: 8px 12px; border-bottom: 1px solid #eef1f4; }
+    .picker select {
+      width: 100%; padding: 8px 10px; font-size: 14px;
+      border: 1px solid #d7dee6; border-radius: 8px; background: #fff; color: #333;
+    }
+    /* 表格 */
+    table { width: 100%; border-collapse: collapse; }
+    thead th {
+      font-size: 15px; font-weight: 700; color: #222; padding: 12px 8px;
+      border-bottom: 2px solid #e6eaef;
+    }
+    tbody td { font-size: 14px; color: #444; padding: 14px 8px; text-align: center; }
+    tbody td.date { color: #333; }
+    tbody tr:nth-child(odd) { background: #f6f8fa; }
+    tbody tr:nth-child(even) { background: #fff; }
+    th.c-date, td.c-date { width: 44%; }
+    th.c-in, td.c-in, th.c-out, td.c-out { width: 28%; }
+    .empty { text-align: center; color: #999; padding: 40px 16px; font-size: 14px; }
+    .loading { text-align: center; color: #999; padding: 40px 16px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    打卡紀錄
+    <span class="menu">☰</span>
+  </div>
+
+  <div class="picker">
+    <select id="who"><option>載入中…</option></select>
+  </div>
+
+  <div class="toolbar">
+    <button class="navbtn" id="prev">‹ 上一週</button>
+    <span class="range" id="range">—</span>
+    <button class="navbtn" id="next">下一週 ›</button>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th class="c-date">日期</th>
+        <th class="c-in">上班</th>
+        <th class="c-out">下班</th>
+      </tr>
+    </thead>
+    <tbody id="rows">
+      <tr><td colspan="3" class="loading" id="status">資料載入中…</td></tr>
+    </tbody>
+  </table>
+
+  <script>
+    /*************** CONFIG — 上傳前請填入 ***************/
+    // 跟 index.html 一樣，用 Apps Script 部署的 /exec 網址
+    const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbypJPX4bjGbXvDZfqXcdmI-7Im3L-XDIHoKCeO4ns9y31zdbsXmZiUU0fPjoseCV--RyA/exec';
+    /****************************************************/
+
+    const $ = (id) => document.getElementById(id);
+    let allRecords = [];   // 全部打卡紀錄
+    let names = [];        // 員工名單
+    let weekOffset = 0;    // 0=本週，-1=上一週，+1=下一週
+
+    // ── 日期工具（以「週一」為一週開始）──
+    function startOfWeek(base) {
+      const d = new Date(base);
+      d.setHours(0, 0, 0, 0);
+      const day = (d.getDay() + 6) % 7; // 週一=0
+      d.setDate(d.getDate() - day);
+      return d;
+    }
+    function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+    function ymd(d) {
+      const p = (n) => String(n).padStart(2, '0');
+      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+    }
+
+    // ── JSONP 撈資料 ──
+    function loadData() {
+      const cbName = 'cb_' + Date.now();
+      const s = document.createElement('script');
+      window[cbName] = function (data) {
+        try { onData(data || []); } finally { delete window[cbName]; s.remove(); }
+      };
+      s.onerror = function () {
+        $('status').textContent = '❌ 讀取失敗，請確認 WEB_APP_URL 與部署設定';
+        delete window[cbName]; s.remove();
+      };
+      s.src = WEB_APP_URL + '?callback=' + cbName + '&t=' + Date.now();
+      document.body.appendChild(s);
+    }
+
+    function onData(data) {
+      allRecords = data;
+      names = [...new Set(data.map((r) => r.name).filter(Boolean))].sort();
+      const sel = $('who');
+      if (names.length === 0) {
+        sel.innerHTML = '<option>（尚無資料）</option>';
+        render();
+        return;
+      }
+      sel.innerHTML = names.map((n) => `<option value="${n}">${n}</option>`).join('');
+      render();
+    }
+
+    // ── 渲染表格 ──
+    function render() {
+      const name = $('who').value;
+      const wkStart = addDays(startOfWeek(new Date()), weekOffset * 7);
+      const wkEnd = addDays(wkStart, 6);
+      $('range').textContent = ymd(wkStart) + ' ~ ' + ymd(wkEnd);
+      $('next').disabled = weekOffset >= 0; // 不看未來週
+
+      // 篩選：該員工 + 該週
+      const startStr = ymd(wkStart), endStr = ymd(wkEnd);
+      const inWeek = allRecords.filter(
+        (r) => r.name === name && r.date >= startStr && r.date <= endStr
+      );
+
+      // 依日期彙整：上班取最早、下班取最晚
+      const byDate = {};
+      inWeek.forEach((r) => {
+        const d = (byDate[r.date] = byDate[r.date] || { in: null, out: null });
+        if (r.type.indexOf('上') > -1) { if (!d.in || r.time < d.in) d.in = r.time; }
+        if (r.type.indexOf('下') > -1) { if (!d.out || r.time > d.out) d.out = r.time; }
+      });
+
+      const dates = Object.keys(byDate).sort().reverse(); // 新到舊
+      const tbody = $('rows');
+      if (dates.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="empty">本週沒有打卡紀錄</td></tr>';
+        return;
+      }
+      tbody.innerHTML = dates.map((dt) => {
+        const d = byDate[dt];
+        return `<tr>
+          <td class="c-date date">${dt}</td>
+          <td class="c-in">${d.in || '—'}</td>
+          <td class="c-out">${d.out || '—'}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    // ── 事件 ──
+    $('prev').addEventListener('click', () => { weekOffset -= 1; render(); });
+    $('next').addEventListener('click', () => { if (weekOffset < 0) { weekOffset += 1; render(); } });
+    $('who').addEventListener('change', render);
+
+    loadData();
+  </script>
+</body>
+</html>
