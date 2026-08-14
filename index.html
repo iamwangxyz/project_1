@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<!--
+  LINE 打卡系統 — LIFF 前端頁（靜態托管版）
+  ⚠️ 這個檔案要放到「靜態網站托管」上（例如 GitHub Pages），
+     不要放在 Apps Script 裡 —— LIFF 無法在 Apps Script 的沙箱 iframe 裡運作。
+  Apps Script 只當後端（接收打卡、寫 Sheet、推播）。
+
+  上傳前必改兩個地方（見下方 CONFIG）：
+    LIFF_ID     ：LINE Developers → LINE Login channel → LIFF 分頁產生的 LIFF ID
+    WEB_APP_URL ：Apps Script 部署後的網頁應用程式網址（.../exec 結尾）
+-->
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>員工打卡</title>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif;
+      background: #f2f4f7;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 20px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+      padding: 36px 28px;
+      width: 100%;
+      max-width: 360px;
+      text-align: center;
+    }
+    .icon { font-size: 56px; margin-bottom: 8px; }
+    .title { font-size: 24px; font-weight: 700; color: #1a1a1a; margin-bottom: 4px; }
+    .subtitle { font-size: 15px; color: #888; margin-bottom: 24px; }
+    .clock { font-size: 40px; font-weight: 700; color: #06c755; letter-spacing: 1px; margin-bottom: 4px; }
+    .date { font-size: 15px; color: #666; margin-bottom: 28px; }
+    .name { font-size: 16px; color: #333; margin-bottom: 20px; min-height: 22px; }
+    .name b { color: #06c755; }
+    button {
+      width: 100%;
+      border: none;
+      border-radius: 14px;
+      padding: 16px;
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff;
+      background: #06c755;
+      cursor: pointer;
+      transition: opacity .2s;
+    }
+    button:disabled { opacity: .5; cursor: default; }
+    button.out { background: #ff6b35; }
+    .result { margin-top: 22px; font-size: 16px; min-height: 24px; }
+    .result.ok { color: #06c755; font-weight: 700; }
+    .result.err { color: #e53935; font-weight: 700; }
+    .spinner {
+      display: inline-block; width: 18px; height: 18px;
+      border: 3px solid rgba(255,255,255,.4); border-top-color: #fff;
+      border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon" id="icon">🕘</div>
+    <div class="title" id="title">上班打卡</div>
+    <div class="subtitle">請確認資訊後按下按鈕</div>
+
+    <div class="clock" id="clock">--:--:--</div>
+    <div class="date" id="date">載入中…</div>
+
+    <div class="name" id="name">正在讀取身分…</div>
+
+    <button id="btn" disabled>準備中…</button>
+
+    <div class="result" id="result"></div>
+  </div>
+
+  <script>
+    /*************** CONFIG — 部署前請填入 ***************/
+    const LIFF_ID     = 'YOUR_LIFF_ID';                                   // ← 換成你的 LIFF ID
+    const WEB_APP_URL = 'https://script.google.com/macros/s/XXXX/exec';   // ← 換成 Apps Script 部署網址
+    /****************************************************/
+
+    // 打卡類型由網址參數決定：?type=in（上班） / ?type=out（下班）
+    const _params = new URLSearchParams(location.search);
+    const TYPE = _params.get('type') === 'out' ? 'out' : 'in';
+    const isOut = TYPE === 'out';
+
+    const $ = (id) => document.getElementById(id);
+    let profile = null;
+
+    // 設定畫面文字/顏色
+    $('icon').textContent  = isOut ? '🌙' : '🌅';
+    $('title').textContent = isOut ? '下班打卡' : '上班打卡';
+    if (isOut) $('btn').classList.add('out');
+
+    // 即時時鐘
+    function tick() {
+      const now = new Date();
+      const p = (n) => String(n).padStart(2, '0');
+      $('clock').textContent = `${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}`;
+      const w = ['日','一','二','三','四','五','六'][now.getDay()];
+      $('date').textContent = `${now.getFullYear()}/${p(now.getMonth()+1)}/${p(now.getDate())}（${w}）`;
+    }
+    tick();
+    setInterval(tick, 1000);
+
+    // 初始化 LIFF
+    async function main() {
+      try {
+        await liff.init({ liffId: LIFF_ID });
+        if (!liff.isLoggedIn()) { liff.login(); return; }
+        profile = await liff.getProfile();
+        $('name').innerHTML = `打卡人員：<b>${profile.displayName}</b>`;
+        $('btn').disabled = false;
+        $('btn').textContent = isOut ? '確認下班打卡' : '確認上班打卡';
+      } catch (err) {
+        $('name').textContent = '初始化失敗，請關閉重開';
+        $('result').className = 'result err';
+        $('result').textContent = err.message;
+      }
+    }
+
+    // 送出打卡
+    $('btn').addEventListener('click', async () => {
+      if (!profile) return;
+      $('btn').disabled = true;
+      $('btn').innerHTML = '<span class="spinner"></span>';
+      $('result').className = 'result';
+      $('result').textContent = '';
+      try {
+        // 前端與 Apps Script 是跨網域，用 no-cors + text/plain 送出，
+        // 避開 CORS 限制。請求會確實送達後端（寫入 Sheet、推播），
+        // 但瀏覽器讀不到回應內容，因此以「LINE 推播通知」作為最終確認。
+        await fetch(WEB_APP_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            userId: profile.userId,
+            displayName: profile.displayName,
+            type: TYPE,
+          }),
+        });
+        $('result').className = 'result ok';
+        $('result').textContent = `✅ ${isOut ? '下班' : '上班'}打卡已送出，請看 LINE 通知`;
+        $('btn').textContent = '已完成，可關閉視窗';
+        setTimeout(() => { if (liff.isInClient()) liff.closeWindow(); }, 1800);
+      } catch (err) {
+        $('result').className = 'result err';
+        $('result').textContent = '❌ 送出失敗，請檢查網路後再試';
+        $('btn').disabled = false;
+        $('btn').textContent = '再試一次';
+      }
+    });
+
+    main();
+  </script>
+</body>
+</html>
