@@ -56,6 +56,7 @@
     }
     button:disabled { opacity: .5; cursor: default; }
     button.out { background: #ff6b35; }
+    .divider { border: none; border-top: 1px solid #e6e8eb; margin: 24px 0 32px; }
     .result { margin-top: 22px; font-size: 16px; min-height: 24px; }
     .result.ok { color: #06c755; font-weight: 700; }
     .result.err { color: #e53935; font-weight: 700; }
@@ -69,9 +70,10 @@
 </head>
 <body>
   <div class="card">
-    <div class="icon" id="icon">🕘</div>
     <div class="title" id="title">上班打卡</div>
     <div class="subtitle">請確認資訊後按下按鈕</div>
+
+    <hr class="divider" />
 
     <div class="clock" id="clock">--:--:--</div>
     <div class="date" id="date">載入中…</div>
@@ -81,11 +83,6 @@
     <button id="btn" disabled>準備中…</button>
 
     <div class="result" id="result"></div>
-
-    <!-- 偵錯視窗：排查問題用，一切正常後可整段刪掉 -->
-    <pre id="debug" style="text-align:left;margin-top:18px;padding:10px;background:#111;color:#0f0;
-      font-size:11px;line-height:1.5;border-radius:8px;max-height:160px;overflow:auto;
-      white-space:pre-wrap;word-break:break-all;"></pre>
   </div>
 
   <script>
@@ -114,7 +111,6 @@
     log('LIFF SDK：' + (window.liff ? '已載入' : '❌ 未載入（檢查網路）'));
 
     // 設定畫面文字/顏色
-    $('icon').textContent  = isOut ? '🌙' : '🌅';
     $('title').textContent = isOut ? '下班打卡' : '上班打卡';
     if (isOut) $('btn').classList.add('out');
 
