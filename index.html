@@ -81,6 +81,11 @@
     <button id="btn" disabled>準備中…</button>
 
     <div class="result" id="result"></div>
+
+    <!-- 偵錯視窗：排查問題用，一切正常後可整段刪掉 -->
+    <pre id="debug" style="text-align:left;margin-top:18px;padding:10px;background:#111;color:#0f0;
+      font-size:11px;line-height:1.5;border-radius:8px;max-height:160px;overflow:auto;
+      white-space:pre-wrap;word-break:break-all;"></pre>
   </div>
 
   <script>
@@ -96,6 +101,17 @@
 
     const $ = (id) => document.getElementById(id);
     let profile = null;
+
+    // 偵錯記錄：把每一步印在畫面上，方便截圖排查
+    function log(msg) {
+      const t = new Date().toLocaleTimeString();
+      const el = $('debug');
+      if (el) el.textContent += `[${t}] ${msg}\n`;
+    }
+    // 攔截未預期的錯誤，也印出來
+    window.onerror = (m) => log('window.onerror: ' + m);
+    log('頁面載入 · type=' + TYPE);
+    log('LIFF SDK：' + (window.liff ? '已載入' : '❌ 未載入（檢查網路）'));
 
     // 設定畫面文字/顏色
     $('icon').textContent  = isOut ? '🌙' : '🌅';
@@ -115,23 +131,40 @@
 
     // 初始化 LIFF
     async function main() {
+      if (!LIFF_ID || LIFF_ID === 'YOUR_LIFF_ID') {
+        log('❌ LIFF_ID 還沒填！請在 CONFIG 填入你的 LIFF ID');
+        $('name').textContent = '設定未完成：LIFF_ID 未填';
+        return;
+      }
       try {
+        log('liff.init 中…');
         await liff.init({ liffId: LIFF_ID });
-        if (!liff.isLoggedIn()) { liff.login(); return; }
+        log('liff.init 成功');
+        log('isInClient=' + liff.isInClient() + ' · isLoggedIn=' + liff.isLoggedIn());
+        if (!liff.isLoggedIn()) {
+          log('尚未登入 → 導向 LINE 登入');
+          liff.login();
+          return;
+        }
+        log('讀取 getProfile 中…');
         profile = await liff.getProfile();
+        log('✅ 取得身分：' + profile.displayName);
         $('name').innerHTML = `打卡人員：<b>${profile.displayName}</b>`;
         $('btn').disabled = false;
         $('btn').textContent = isOut ? '確認下班打卡' : '確認上班打卡';
       } catch (err) {
+        log('❌ 錯誤：' + (err && err.message ? err.message : err));
         $('name').textContent = '初始化失敗，請關閉重開';
         $('result').className = 'result err';
-        $('result').textContent = err.message;
+        $('result').textContent = (err && err.message) ? err.message : String(err);
       }
     }
 
     // 送出打卡
     $('btn').addEventListener('click', async () => {
-      if (!profile) return;
+      log('按下打卡按鈕');
+      if (!profile) { log('⚠️ 尚未取得身分，忽略點擊'); return; }
+      log('送出到後端：' + WEB_APP_URL.slice(0, 45) + '…');
       $('btn').disabled = true;
       $('btn').innerHTML = '<span class="spinner"></span>';
       $('result').className = 'result';
@@ -150,11 +183,13 @@
             type: TYPE,
           }),
         });
+        log('✅ 已送出（no-cors，看不到後端回應）');
         $('result').className = 'result ok';
         $('result').textContent = `✅ ${isOut ? '下班' : '上班'}打卡已送出，請看 LINE 通知`;
         $('btn').textContent = '已完成，可關閉視窗';
         setTimeout(() => { if (liff.isInClient()) liff.closeWindow(); }, 1800);
       } catch (err) {
+        log('❌ 送出失敗：' + (err && err.message ? err.message : err));
         $('result').className = 'result err';
         $('result').textContent = '❌ 送出失敗，請檢查網路後再試';
         $('btn').disabled = false;
