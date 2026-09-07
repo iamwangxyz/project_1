@@ -86,7 +86,7 @@
   <script>
     /*************** CONFIG — 上傳前請填入 ***************/
     // 跟 index.html 一樣，用 Apps Script 部署的 /exec 網址
-    const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbypJPX4bjGbXvDZfqXcdmI-7Im3L-XDIHoKCeO4ns9y31zdbsXmZiUU0fPjoseCV--RyA/exec';
+    const WEB_APP_URL = 'https://script.google.com/macros/s/XXXX/exec';
     /****************************************************/
 
     const $ = (id) => document.getElementById(id);
@@ -131,6 +131,36 @@
       render();
     }
 
+    // 把某員工的打卡紀錄「配對」成一段段班別（上班 → 之後的下班）。
+    // 跨午夜也能正確配對：下班算回上班那天，隔天凌晨的下班不會漏掉。
+    function buildSessions(name) {
+      const recs = allRecords
+        .filter((r) => r.name === name)
+        .map((r) => ({ type: r.type, date: r.date, time: r.time, key: r.date + ' ' + r.time }))
+        .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)); // 依時間先後
+
+      const sessions = [];
+      let open = null;
+      recs.forEach((r) => {
+        const isIn = r.type.indexOf('上') > -1;
+        const isOut = r.type.indexOf('下') > -1;
+        if (isIn) {
+          if (open) sessions.push(open); // 前一段只有上班沒下班，先收起來
+          open = { date: r.date, inTime: r.time, outTime: null, outDate: null };
+        } else if (isOut) {
+          if (open) {
+            open.outTime = r.time; open.outDate = r.date;
+            sessions.push(open); open = null;
+          } else {
+            // 只有下班、沒有對應的上班
+            sessions.push({ date: r.date, inTime: null, outTime: r.time, outDate: r.date });
+          }
+        }
+      });
+      if (open) sessions.push(open);
+      return sessions;
+    }
+
     // ── 渲染表格 ──
     function render() {
       const name = $('who').value;
@@ -147,30 +177,27 @@
         return;
       }
 
-      // 篩選：該員工 + 該月份
-      const inMonth = allRecords.filter(
-        (r) => r.name === name && r.date.slice(0, 7) === prefix
-      );
+      // 以「上班日」歸屬月份（跨夜下班仍算在上班那天），再由新到舊排序
+      const sessions = buildSessions(name)
+        .filter((s) => s.date.slice(0, 7) === prefix)
+        .sort((a, b) => {
+          const ka = a.date + (a.inTime || a.outTime || '');
+          const kb = b.date + (b.inTime || b.outTime || '');
+          return ka < kb ? 1 : ka > kb ? -1 : 0;
+        });
 
-      // 依日期彙整：上班取最早、下班取最晚
-      const byDate = {};
-      inMonth.forEach((r) => {
-        const d = (byDate[r.date] = byDate[r.date] || { in: null, out: null });
-        if (r.type.indexOf('上') > -1) { if (!d.in || r.time < d.in) d.in = r.time; }
-        if (r.type.indexOf('下') > -1) { if (!d.out || r.time > d.out) d.out = r.time; }
-      });
-
-      const dates = Object.keys(byDate).sort().reverse(); // 新到舊
-      if (dates.length === 0) {
+      if (sessions.length === 0) {
         tbody.innerHTML = '<tr><td colspan="3" class="empty">本月沒有打卡紀錄</td></tr>';
         return;
       }
-      tbody.innerHTML = dates.map((dt) => {
-        const d = byDate[dt];
+      tbody.innerHTML = sessions.map((s) => {
+        // 下班若是隔天（跨午夜），標註「(隔日)」
+        let out = s.outTime || '—';
+        if (s.outTime && s.outDate && s.outDate !== s.date) out = s.outTime + '（隔日）';
         return `<tr>
-          <td class="c-date date">${dt}</td>
-          <td class="c-in">${d.in || '—'}</td>
-          <td class="c-out">${d.out || '—'}</td>
+          <td class="c-date date">${s.date}</td>
+          <td class="c-in">${s.inTime || '—'}</td>
+          <td class="c-out">${out}</td>
         </tr>`;
       }).join('');
     }
